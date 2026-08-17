@@ -1,0 +1,123 @@
+"""
+Routing tool for the hike planner agent.
+
+Originally built on OpenRouteService (ORS), but ORS's Directions V2 API
+started rejecting a valid, unexpired key with 403 "Access to this API has
+been disallowed" on both api.openrouteservice.org and api.heigit.org as of
+2026-08-17, despite the dashboard showing unused quota. Matches an
+unresolved report on the ORS community forum from ~2026-07-25 describing
+identical symptoms — appears to be an account-side bug on HeiGIT's end,
+not a code or key issue. Support ticket filed; ORS may be reinstated later.
+
+Swapped to GraphHopper's Directions API (free tier, foot profile,
+elevation included) to keep the build moving. Geocoding still uses a
+manual KNOWN_LOCATIONS lookup table for huts tested so far, since Pelias
+(ORS's geocoder) repeatedly mismatched remote alpine hut names to nearby
+but incorrect features (e.g. a peak instead of a hut). No fallback
+geocoder is currently wired up for places outside KNOWN_LOCATIONS.
+"""
+
+import os
+import sys
+
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
+GH_API_KEY = os.getenv("GRAPHHOPPER_API_KEY")
+GH_ROUTE_URL = "https://graphhopper.com/api/1/route"
+GH_GEOCODE_URL = "https://graphhopper.com/api/1/geocode"
+
+KNOWN_LOCATIONS = {
+    "malyovitsa hut": (23.37430, 42.18876),
+    "malyovitsa peak": (23.3631, 42.1736),
+    "ivan vazov hut": (23.2835, 42.1897),
+    "musala hut": (23.5872, 42.1981),
+    "musala peak": (23.5853, 42.1792),
+    "rila monastery": (23.3403, 42.1333),
+    "bukovets hut": (25.8877, 42.7895),
+    "chumerna hut": (25.9600, 42.7867),
+    "aglikina meadow": (26.1557, 42.8169),
+    "luda kamchiya spring": (26.2125, 42.8198),
+    # add more as you use them
+}
+
+def _geocode(place: str) -> tuple[tuple[float, float], str]:
+    key = place.strip().lower()
+    if key in KNOWN_LOCATIONS:
+        lon, lat = KNOWN_LOCATIONS[key]
+        print(f"  Using known location for {place!r} -> ({lat:.4f}, {lon:.4f})")
+        return (lon, lat), place
+
+    response = requests.get(
+        GH_GEOCODE_URL,
+        params={"q": place, "locale": "en", "limit": 1, "key": GH_API_KEY},
+        timeout=10,
+    )
+    response.raise_for_status()
+    hits = response.json()["hits"]
+    if not hits:
+        raise ValueError(f"No geocoding results found for {place!r}")
+    point = hits[0]["point"]
+    lat, lon = point["lat"], point["lng"]
+    label = hits[0].get("name", place)
+    print(f"  Geocoded {place!r} -> {label} ({lat:.4f}, {lon:.4f})")
+    return (lon, lat), label
+
+def get_hiking_route(waypoints: list[str]) -> dict:
+    """Geocode a sequence of place names and fetch a foot-hiking route through them in order.
+
+    Args:
+        waypoints: Ordered list of place names, e.g. [start, via_point, finish].
+
+    Returns:
+        A dict with resolved labels, coordinates, total distance (meters),
+        estimated duration (seconds), and an elevation profile.
+    """
+    resolved = [_geocode(wp) for wp in waypoints]
+    coords = [(lat, lon) for (lon, lat), _ in resolved]
+    labels = [label for _, label in resolved]
+
+    response = requests.get(
+        GH_ROUTE_URL,
+        params={
+            "point": [f"{lat},{lon}" for lat, lon in coords],
+            "vehicle": "foot",
+            "elevation": "true",
+            "points_encoded": "false",
+            "key": GH_API_KEY,
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+    payload = response.json()
+
+    path = payload["paths"][0]
+    elevations = [pt[2] for pt in path["points"]["coordinates"]]
+
+    return {
+        "resolved_waypoints": labels,
+        "waypoint_coords": [{"lat": lat, "lon": lon} for lat, lon in coords],
+        "distance": path["distance"],
+        "duration": path["time"] / 1000,
+        "elevation_profile": {
+            "min": min(elevations),
+            "max": max(elevations),
+            "total_ascent": path.get("ascend", 0),
+            "total_descent": path.get("descend", 0),
+        },
+    }
+
+if __name__ == "__main__":
+    if len(sys.argv) < 3:
+        print("Usage: python3 tools/routing.py <point1> <point2> [<point3> ...]")
+        sys.exit(1)
+
+    waypoints = sys.argv[1:]
+    route = get_hiking_route(waypoints)
+    print(f"Waypoints: {route['resolved_waypoints']}")
+    print(f"Coords: {route['waypoint_coords']}")
+    print(f"Distance: {route['distance']} m")
+    print(f"Duration: {route['duration']} s")
+    print(f"Elevation: {route['elevation_profile']}")
