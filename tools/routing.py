@@ -1,20 +1,27 @@
 """
 Routing tool for the hike planner agent.
 
-Originally built on OpenRouteService (ORS), but ORS's Directions V2 API
-started rejecting a valid, unexpired key with 403 "Access to this API has
-been disallowed" on both api.openrouteservice.org and api.heigit.org as of
-2026-08-17, despite the dashboard showing unused quota. Matches an
+Uses GraphHopper's Directions API (free tier, foot profile, elevation
+included) for both routing and geocoding. Originally built on
+OpenRouteService (ORS), but ORS's Directions V2 API began rejecting a
+valid, unexpired key with 403 "Access to this API has been disallowed" —
+confirmed on both api.openrouteservice.org and api.heigit.org as of
+2026-08-17, despite the dashboard showing unused quota. Matched an
 unresolved report on the ORS community forum from ~2026-07-25 describing
-identical symptoms — appears to be an account-side bug on HeiGIT's end,
-not a code or key issue. Support ticket filed; ORS may be reinstated later.
+identical symptoms. Appears to be an account-side bug on HeiGIT's end, not
+a code or key issue. Support ticket filed; migrated to GraphHopper to keep
+the build moving rather than wait on a fix.
 
-Swapped to GraphHopper's Directions API (free tier, foot profile,
-elevation included) to keep the build moving. Geocoding still uses a
-manual KNOWN_LOCATIONS lookup table for huts tested so far, since Pelias
-(ORS's geocoder) repeatedly mismatched remote alpine hut names to nearby
-but incorrect features (e.g. a peak instead of a hut). No fallback
-geocoder is currently wired up for places outside KNOWN_LOCATIONS.
+Supports routing through an ordered list of 2+ waypoints, not just a
+single start/finish pair.
+
+Geocoding accuracy note: general-purpose geocoders (tested: Pelias/ORS,
+GraphHopper) are unreliable for short alpine hut/peak names without
+strong disambiguation — confirmed failures include a hut name resolving
+to a nearby peak, and a Bulgarian summit name resolving to an unrelated
+peak in Pakistan, even with a regional location bias applied. KNOWN_LOCATIONS
+is the trusted source of truth for any place actually tested; the live
+geocoding API is a best-effort fallback for anything not yet in that table.
 """
 
 import os
