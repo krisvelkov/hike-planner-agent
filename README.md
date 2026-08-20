@@ -52,6 +52,25 @@ Screenshots of instrumented traces (tool calls, latency, token usage) from the P
 ![Trace overview](docs/screenshots/trace-overview.png)
 ![Tool call detail](docs/screenshots/tool-call-detail.png)
 
+## Evaluations
+
+Two LLM-as-a-judge evaluation tasks are configured in Progress AI Observability to score agent output quality against the underlying tool data, using `claude-haiku-4-5-20251001` as the judge model:
+
+- **Trip Summary Groundedness** — checks whether every factual claim in the agent's final summary (distance, elevation, ascent/descent, per-day forecast figures) matches the raw tool data it was based on, scored 1-5.
+- **Weather Risk Flagging** — checks whether the summary proportionately surfaces real weather hazards (high precipitation probability, strong wind, heat combined with significant ascent, cold exposure) against defined thresholds applied to the forecast data, scored 1-5.
+
+Both prompts are written against the trace's tool call data, not just the final text — a judge comparing output to the original user request alone can't catch factual drift from the actual numbers, only whether the response sounds plausible.
+
+**Evidence — a passing trace, scored 5/5:**
+
+![Trace evaluation detail](docs/screenshots/eval-trace-detail.png)
+*A full trace showing the Trip Summary Groundedness evaluator's explanation: every distance, elevation, and weather figure cross-checked against the tool output and confirmed accurate.*
+
+**Evidence — score distribution across multiple runs:**
+
+![Evaluation scores list](docs/screenshots/eval-scores-list.png)
+*Scores across six evaluated spans show real variance (two scored 1, four scored 5) rather than a flat default score — evidence the judge is actually discriminating between grounded and ungrounded outputs, not rubber-stamping every run.*
+
 ## Status
 
 v1 scope complete: point-to-point and multi-waypoint routing, elevation profile, weather forecast, full observability instrumentation. Not yet built: open-area route discovery (e.g. "somewhere in Pirin" without named waypoints) — scoped out of v1 as a heavier build requiring OpenStreetMap trail-discovery queries.
