@@ -18,6 +18,7 @@ Observability.instrument(
 
 import anthropic
 
+from tools.gpx_export import export_gpx
 from tools.routing import get_hiking_route
 from tools.weather import get_weather_forecast
 
@@ -29,9 +30,10 @@ TOOLS = [
         "name": "get_hiking_route",
         "description": (
             "Geocode an ordered sequence of place names and return the "
-            "foot-hiking route through them: resolved coordinates, distance "
-            "(meters), duration (seconds), and an elevation profile (min/max "
-            "elevation and total ascent/descent, all in meters)."
+            "foot-hiking route through them: a route_id (needed later for "
+            "export_gpx), resolved coordinates, distance (meters), duration "
+            "(seconds), and an elevation profile (min/max elevation and total "
+            "ascent/descent, all in meters)."
         ),
         "input_schema": {
             "type": "object",
@@ -67,12 +69,50 @@ TOOLS = [
             "required": ["lat", "lon", "start_date", "end_date"],
         },
     },
+    {
+        "name": "export_gpx",
+        "description": (
+            "Write the route computed by get_hiking_route to a GPX file "
+            "(waypoints for each named stop plus a track split into one "
+            "segment per leg, with elevation) that can be loaded onto a GPS "
+            "device or hiking app. Returns the file path. The route geometry "
+            "is taken from the stored route, never from the conversation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "route_id": {
+                    "type": "string",
+                    "description": "The route_id returned by get_hiking_route.",
+                },
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "Short trip name for the GPX metadata, e.g. "
+                        "'Bukovets hut to Luda Kamchiya Spring, 15-16 Nov'."
+                    ),
+                },
+                "description": {
+                    "type": "string",
+                    "description": (
+                        "Plain-text plan notes to embed in the GPX metadata: "
+                        "dates, distance/elevation summary, weather warnings, "
+                        "advice. Keep it to a few sentences."
+                    ),
+                },
+            },
+            "required": ["route_id"],
+        },
+    },
 ]
 
 TOOL_FUNCTIONS = {
     "get_hiking_route": lambda waypoints: get_hiking_route(waypoints),
     "get_weather_forecast": lambda lat, lon, start_date, end_date: get_weather_forecast(
         lat, lon, start_date, end_date
+    ),
+    "export_gpx": lambda route_id, name=None, description=None: export_gpx(
+        route_id, name, description
     ),
 }
 
@@ -88,11 +128,16 @@ When planning a hike:
    to call get_weather_forecast for the trip's date range. Always check
    weather against the route's actual resolved location — never assume or
    guess coordinates for the forecast.
-3. Once you have both the route and the forecast, give the user a concise
-   final summary covering: total distance, estimated duration, elevation
-   profile (min/max elevation, total ascent/descent), and the day-by-day
-   weather forecast. Call out any weather conditions that could affect the
-   hike (heavy rain, high wind, extreme temperatures).
+3. Once you have both the route and the forecast, call export_gpx with
+   the route_id from the get_hiking_route result, a short trip name, and a
+   few-sentence description of the plan (dates, distance, elevation, any
+   weather warnings). Do not attempt to write GPX content yourself; the
+   tool builds the file from the stored route geometry.
+4. Then give the user a concise final summary covering: total distance,
+   estimated duration, elevation profile (min/max elevation, total
+   ascent/descent), the day-by-day weather forecast, and the path of the
+   GPX file. Call out any weather conditions that could affect the hike
+   (heavy rain, high wind, extreme temperatures).
 
 If a tool call fails (e.g. an unknown place name or a date outside the
 forecast window), explain the failure to the user clearly and, if possible,
