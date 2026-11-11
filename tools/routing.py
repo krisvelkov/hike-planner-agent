@@ -15,6 +15,12 @@ the build moving rather than wait on a fix.
 Supports routing through an ordered list of 2+ waypoints, not just a
 single start/finish pair.
 
+The full route geometry (every point with elevation) is kept in an
+in-process registry keyed by a short route_id, so that tools/gpx_export.py
+can write a GPX file later without the geometry ever passing through the
+LLM's context. Only the summary numbers and the route_id are returned to
+the agent.
+
 Geocoding accuracy note: general-purpose geocoders (tested: Pelias/ORS,
 GraphHopper) are unreliable for short alpine hut/peak names without
 strong disambiguation — confirmed failures include a hut name resolving
@@ -26,6 +32,7 @@ geocoding API is a best-effort fallback for anything not yet in that table.
 
 import os
 import sys
+import uuid
 
 import requests
 from dotenv import load_dotenv
@@ -49,6 +56,22 @@ KNOWN_LOCATIONS = {
     "luda kamchiya spring": (26.2125, 42.8198),
     # add more as you use them
 }
+
+# route_id -> full route data (geometry, labels, waypoint coords, stats).
+# Populated by get_hiking_route; read by tools/gpx_export.py.
+_ROUTES: dict[str, dict] = {}
+
+
+def get_stored_route(route_id: str) -> dict:
+    """Return the stored route for route_id, or raise if it is unknown."""
+    route = _ROUTES.get(route_id)
+    if route is None:
+        known = ", ".join(sorted(_ROUTES)) or "none"
+        raise KeyError(
+            f"Unknown route_id {route_id!r}. Known route ids in this run: {known}. "
+            "Call get_hiking_route first."
+        )
+    return route
 
 def _geocode(place: str) -> tuple[tuple[float, float], str]:
     key = place.strip().lower()
@@ -79,8 +102,9 @@ def get_hiking_route(waypoints: list[str]) -> dict:
         waypoints: Ordered list of place names, e.g. [start, via_point, finish].
 
     Returns:
-        A dict with resolved labels, coordinates, total distance (meters),
-        estimated duration (seconds), and an elevation profile.
+        A dict with a route_id (for later GPX export), resolved labels,
+        coordinates, total distance (meters), estimated duration (seconds),
+        and an elevation profile.
     """
     resolved = [_geocode(wp) for wp in waypoints]
     coords = [(lat, lon) for (lon, lat), _ in resolved]
@@ -101,9 +125,11 @@ def get_hiking_route(waypoints: list[str]) -> dict:
     payload = response.json()
 
     path = payload["paths"][0]
-    elevations = [pt[2] for pt in path["points"]["coordinates"]]
+    # GraphHopper returns GeoJSON order: [lon, lat, ele] per point.
+    geometry = [(pt[1], pt[0], pt[2]) for pt in path["points"]["coordinates"]]
+    elevations = [ele for _, _, ele in geometry]
 
-    return {
+    summary = {
         "resolved_waypoints": labels,
         "waypoint_coords": [{"lat": lat, "lon": lon} for lat, lon in coords],
         "distance": path["distance"],
@@ -116,6 +142,14 @@ def get_hiking_route(waypoints: list[str]) -> dict:
         },
     }
 
+    route_id = uuid.uuid4().hex[:8]
+    _ROUTES[route_id] = {
+        **summary,
+        "requested_waypoints": list(waypoints),
+        "geometry": geometry,  # list of (lat, lon, ele)
+    }
+    return {"route_id": route_id, **summary}
+
 if __name__ == "__main__":
     if len(sys.argv) < 3:
         print("Usage: python3 tools/routing.py <point1> <point2> [<point3> ...]")
@@ -123,6 +157,7 @@ if __name__ == "__main__":
 
     waypoints = sys.argv[1:]
     route = get_hiking_route(waypoints)
+    print(f"Route id: {route['route_id']}")
     print(f"Waypoints: {route['resolved_waypoints']}")
     print(f"Coords: {route['waypoint_coords']}")
     print(f"Distance: {route['distance']} m")
